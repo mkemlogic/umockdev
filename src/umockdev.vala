@@ -969,22 +969,8 @@ public class Testbed: GLib.Object {
         return true;
     }
 
-    /**
-     * umockdev_testbed_load_script:
-     * @self: A #UMockdevTestbed.
-     * @dev: Device path (/dev/...) for which to load the script record.
-     *       %NULL is valid; in this case the script is associated with
-     *       the device node it was recorded from.
-     * @recordfile: Path of the script record file.
-     * @error: return location for a GError, or %NULL
-     *
-     * Load a script record file for a particular device into the testbed.
-     * script records can be created with umockdev-record --script.
-     *
-     * Returns: %TRUE on success, %FALSE if @recordfile is invalid and an error
-     *          occurred.
-     */
-    public bool load_script (string? dev, string recordfile)
+
+    private bool _load_script (string? dev, string recordfile, bool blocking)
         throws GLib.Error, FileError, IOError, RegexError
     {
         string? owned_dev = dev;
@@ -1012,8 +998,33 @@ public class Testbed: GLib.Object {
         if (fd < 0)
             throw new FileError.INVAL (owned_dev + " is not a device suitable for scripts");
 
-        this.dev_script_runner.insert (owned_dev, new ScriptRunner (owned_dev, recordfile, fd));
+        if (!blocking)
+            this.dev_script_runner.insert (owned_dev, new ScriptRunner (owned_dev, recordfile, fd, blocking));
+        else
+            new ScriptRunner (owned_dev, recordfile, fd, blocking);
+
         return true;
+    }
+
+    /**
+     * umockdev_testbed_load_script:
+     * @self: A #UMockdevTestbed.
+     * @dev: Device path (/dev/...) for which to load the script record.
+     *       %NULL is valid; in this case the script is associated with
+     *       the device node it was recorded from.
+     * @recordfile: Path of the script record file.
+     * @error: return location for a GError, or %NULL
+     *
+     * Load a script record file for a particular device into the testbed.
+     * script records can be created with umockdev-record --script.
+     *
+     * Returns: %TRUE on success, %FALSE if @recordfile is invalid and an error
+     *          occurred.
+     */
+    public bool load_script (string? dev, string recordfile)
+        throws GLib.Error, FileError, IOError, RegexError
+    {
+        return _load_script (dev, recordfile, false);
     }
 
     /**
@@ -1048,31 +1059,7 @@ public class Testbed: GLib.Object {
         return true;
     }
 
-    /**
-     * umockdev_testbed_load_evemu_events:
-     * @self: A #UMockdevTestbed.
-     * @dev: Device path (/dev/...) for which to load the evemu events.
-     *       %NULL is valid; in this case the events are associated with
-     *       the device node it was recorded from.
-     * @eventsfile: Path of the evemu events file.
-     * @error: return location for a GError, or %NULL
-     *
-     * Load an evemu event file for a particular device into the testbed. These
-     * have a very simple line-based format with 4 fields that represent the
-     * data in a struct input_event:
-     *
-     *  E: sec.usec evtype(hex) evcode(hex) evvalue
-     *
-     * The timestamps in those are absolute, and are usually as they were at
-     * record time. When loading them into umockdev they are interpreted
-     * relatively: the first event happens immediately, and the time to the
-     * next event is the difference between the corresponding timestamps in the
-     * .event file.
-     *
-     * Returns: %TRUE on success, %FALSE if @eventsfile is invalid and an error
-     *          occurred.
-     */
-    public bool load_evemu_events (string? dev, string eventsfile)
+      private bool _load_evemu_events (string? dev, string eventsfile, bool blocking)
         throws GLib.Error, FileError, IOError, RegexError
     {
         File f_ev = File.new_for_path(eventsfile);
@@ -1132,10 +1119,59 @@ public class Testbed: GLib.Object {
             owned_dev = recorded_dev;
         }
 
-        bool ret = load_script(owned_dev, script_file);
+        bool ret = _load_script(owned_dev, script_file, blocking);
         FileUtils.unlink(script_file);
         return ret;
     }
+
+    /**
+     * umockdev_testbed_load_evemu_events:
+     * @self: A #UMockdevTestbed.
+     * @dev: Device path (/dev/...) for which to load the evemu events.
+     *       %NULL is valid; in this case the events are associated with
+     *       the device node it was recorded from.
+     * @eventsfile: Path of the evemu events file.
+     * @error: return location for a GError, or %NULL
+     *
+     * Load an evemu event file for a particular device into the testbed. These
+     * have a very simple line-based format with 4 fields that represent the
+     * data in a struct input_event:
+     *
+     *  E: sec.usec evtype(hex) evcode(hex) evvalue
+     *
+     * The timestamps in those are absolute, and are usually as they were at
+     * record time. When loading them into umockdev they are interpreted
+     * relatively: the first event happens immediately, and the time to the
+     * next event is the difference between the corresponding timestamps in the
+     * .event file.
+     *
+     * Returns: %TRUE on success, %FALSE if @eventsfile is invalid and an error
+     *          occurred.
+     */
+    public bool load_evemu_events (string? dev, string eventsfile)
+        throws GLib.Error, FileError, IOError, RegexError
+    {
+        return _load_evemu_events(dev, eventsfile, false);
+    }
+
+    /**
+     * umockdev_testbed_load_evemu_events_blocking:
+     * @self: A #UMockdevTestbed.
+     * @dev: Device path (/dev/...) for which to load the evemu events.
+     *       %NULL is valid; in this case the events are associated with
+     *       the device node it was recorded from.
+     * @eventsfile: Path of the evemu events file.
+     * @error: return location for a GError, or %NULL
+     *
+     * Same as umockdev_testbed_load_evemu_events, but this function
+     * blocks until all events are submitted. Can be called multiple times.
+     */
+    public bool load_evemu_events_blocking(string? dev, string eventsfile)
+        throws GLib.Error, FileError, IOError, RegexError
+    {
+        return _load_evemu_events(dev, eventsfile, true);
+    }
+
 
     private static HashTable<string, string> bus_lookup_table;
 
@@ -1697,7 +1733,7 @@ find_devnode (string devpath)
 
 private class ScriptRunner {
 
-    public ScriptRunner (string device, string script_file, int fd) throws FileError
+    public ScriptRunner (string device, string script_file, int fd, bool blocking) throws FileError
     {
         this.script = FileStream.open (script_file, "r");
         if (this.script == null)
@@ -1707,8 +1743,12 @@ private class ScriptRunner {
         this.script_file = script_file;
         this.fd = fd;
         this.running = true;
-
-        this.thread = new Thread<void*> (device, this.run);
+        if (!blocking) {
+            this.thread = new Thread<void*> (device, this.run);
+        } else {
+            this.run ();
+            this.running = false;
+        }
     }
 
     ~ScriptRunner ()
@@ -2056,7 +2096,7 @@ private class SocketServer {
                         debug ("socket server thread: accepted request on server socket fd %i, path %s, script %s",
                                s.fd, sock_path, script);
                         string key = "%s%i".printf (sock_path, fd);
-                        this.script_runners.insert (key, new ScriptRunner (key, script, fd));
+                        this.script_runners.insert (key, new ScriptRunner (key, script, fd, false));
                     } catch (GLib.Error e) {
                         error ("socket server thread: cannot launch ScriptRunner: %s", e.message);
                     }
